@@ -24,7 +24,9 @@ jobs:
       - name: Install Gitleaks
         run: |
           wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
+
           tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
+
           sudo mv gitleaks /usr/local/bin/
 
       # SECRET SCANNING
@@ -45,19 +47,8 @@ jobs:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
-          output: 'trivy-fs-report.txt'
-          severity: 'HIGH,CRITICAL'
-          exit-code: '0'
-
-      # ENFORCE ONLY CRITICAL FILESYSTEM VULNERABILITIES
-      - name: Enforce Critical Filesystem Policy
-        run: |
-          if grep -q CRITICAL trivy-fs-report.txt; then
-            echo "CRITICAL vulnerabilities found"
-            exit 1
-          else
-            echo "No CRITICAL vulnerabilities found"
-          fi
+          severity: 'CRITICAL'
+          exit-code: '1'
 
       # IAC SCANNING
       - name: Run Checkov Scan
@@ -89,6 +80,7 @@ jobs:
       - name: Install Trivy
         run: |
           sudo apt-get update
+
           sudo apt-get install wget apt-transport-https gnupg lsb-release jq -y
 
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
@@ -103,20 +95,9 @@ jobs:
       - name: Scan Docker Image
         run: |
           trivy image \
-          --severity HIGH,CRITICAL \
-          --format table \
-          --output trivy-image-report.txt \
+          --severity CRITICAL \
+          --exit-code 1 \
           enterprise-devsecops
-
-      # ENFORCE ONLY CRITICAL IMAGE VULNERABILITIES
-      - name: Enforce Critical Image Policy
-        run: |
-          if grep -q CRITICAL trivy-image-report.txt; then
-            echo "CRITICAL vulnerabilities found"
-            exit 1
-          else
-            echo "No CRITICAL vulnerabilities found"
-          fi
 
       # INSTALL VAULT
       - name: Install Vault
@@ -176,6 +157,7 @@ jobs:
 
     steps:
 
+      # DEPLOY TO DEV
       - name: Deploy to Development
         uses: appleboy/ssh-action@master
         with:
@@ -188,6 +170,7 @@ jobs:
             docker pull aditya1436/enterprise-devsecops:latest
 
             docker stop dev-app || true
+
             docker rm dev-app || true
 
             docker run -d \
@@ -203,6 +186,7 @@ jobs:
 
     steps:
 
+      # DEPLOY TO STAGING
       - name: Deploy to Staging
         uses: appleboy/ssh-action@master
         with:
@@ -215,6 +199,7 @@ jobs:
             docker pull aditya1436/enterprise-devsecops:latest
 
             docker stop staging-app || true
+
             docker rm staging-app || true
 
             docker run -d \
@@ -230,6 +215,7 @@ jobs:
 
     steps:
 
+      # DEPLOY TO PRODUCTION
       - name: Deploy to Production
         uses: appleboy/ssh-action@master
         with:
@@ -242,6 +228,7 @@ jobs:
             docker pull aditya1436/enterprise-devsecops:latest
 
             docker stop prod-app || true
+
             docker rm prod-app || true
 
             docker run -d \
