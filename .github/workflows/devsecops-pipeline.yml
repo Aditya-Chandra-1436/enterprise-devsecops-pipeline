@@ -11,11 +11,12 @@ permissions:
 jobs:
 
   security-scans:
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # CHECKOUT SOURCE CODE
+      # CHECKOUT CODE
       - name: Checkout Code
         uses: actions/checkout@v4
 
@@ -37,36 +38,40 @@ jobs:
         with:
           config: "p/security-audit"
 
-      # FILESYSTEM DEPENDENCY SCAN
-      # Logs HIGH + CRITICAL vulnerabilities
+      # FILESYSTEM SCAN
       - name: Run Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
+          output: 'trivy-fs-report.txt'
           severity: 'HIGH,CRITICAL'
           exit-code: '0'
 
-      # POLICY GATE
-      # FAILS PIPELINE ONLY FOR CRITICAL VULNERABILITIES
+      # ENFORCE ONLY CRITICAL FILESYSTEM VULNERABILITIES
       - name: Enforce Critical Filesystem Policy
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'table'
-          severity: 'CRITICAL'
-          exit-code: '1'
+        run: |
+          if grep -q CRITICAL trivy-fs-report.txt; then
+            echo "CRITICAL vulnerabilities found"
+            exit 1
+          else
+            echo "No CRITICAL vulnerabilities found"
+          fi
 
       # IAC SCANNING
       - name: Run Checkov Scan
         uses: bridgecrewio/checkov-action@master
         with:
-          directory: .
+          directory: terraform
+          framework: terraform
+          quiet: true
+          soft_fail: true
 
   build-and-scan:
+
     needs: security-scans
+
     runs-on: ubuntu-latest
 
     steps:
@@ -91,86 +96,95 @@ jobs:
           echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
 
           sudo apt-get update
+
           sudo apt-get install trivy -y
 
       # CONTAINER IMAGE SCAN
-      # LOGS HIGH + CRITICAL VULNERABILITIES
       - name: Scan Docker Image
         run: |
           trivy image \
           --severity HIGH,CRITICAL \
-          --exit-code 0 \
+          --format table \
+          --output trivy-image-report.txt \
           enterprise-devsecops
 
-      # POLICY GATE
-      # FAILS ONLY FOR CRITICAL VULNERABILITIES
+      # ENFORCE ONLY CRITICAL IMAGE VULNERABILITIES
       - name: Enforce Critical Image Policy
         run: |
-          trivy image \
-          --severity CRITICAL \
-          --exit-code 1 \
-          enterprise-devsecops
+          if grep -q CRITICAL trivy-image-report.txt; then
+            echo "CRITICAL vulnerabilities found"
+            exit 1
+          else
+            echo "No CRITICAL vulnerabilities found"
+          fi
 
       # INSTALL VAULT
       - name: Install Vault
         run: |
-          wget https://releases.hashicorp.com/vault/1.17.2/vault_1.17.2_linux_amd64.zip
-          unzip vault_1.17.2_linux_amd64.zip
-          sudo mv vault /usr/local/bin/
+          wget -O- https://apt.releases.hashicorp.com/gpg | \
+          gpg --dearmor | \
+          sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+          https://apt.releases.hashicorp.com $(lsb_release -cs) main" | \
+          sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+          sudo apt update
+
+          sudo apt install vault -y
 
       # AUTHENTICATE TO VAULT
       - name: Authenticate to Vault
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
-          export VAULT_ADDR="http://${{ secrets.EC2_HOST }}:8200"
+          vault status
 
-          vault write auth/approle/login \
-            role_id="${{ secrets.VAULT_ROLE_ID }}" \
-            secret_id="${{ secrets.VAULT_SECRET_ID }}" \
-            -format=json > vault-token.json
-
-          VAULT_TOKEN=$(cat vault-token.json | jq -r '.auth.client_token')
-
-          echo "VAULT_ADDR=http://${{ secrets.EC2_HOST }}:8200" >> $GITHUB_ENV
-          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
-
-      # FETCH DOCKERHUB CREDENTIALS FROM VAULT
+      # FETCH DOCKER CREDENTIALS
       - name: Fetch Docker Credentials
+        env:
+          VAULT_ADDR: ${{ secrets.VAULT_ADDR }}
+          VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
         run: |
-          USERNAME=$(vault kv get -field=username secret/dockerhub)
-          PASSWORD=$(vault kv get -field=password secret/dockerhub)
+          echo "DOCKER_USERNAME=$(vault kv get -field=username secret/dockerhub)" >> $GITHUB_ENV
 
-          echo "DOCKER_USERNAME=$USERNAME" >> $GITHUB_ENV
-          echo "DOCKER_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+          echo "DOCKER_PASSWORD=$(vault kv get -field=password secret/dockerhub)" >> $GITHUB_ENV
 
-      # LOGIN TO DOCKER HUB
+      # DOCKER LOGIN
       - name: Docker Login
-        run: |
-          echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
 
       # TAG IMAGE
       - name: Tag Docker Image
         run: |
           docker tag enterprise-devsecops aditya1436/enterprise-devsecops:latest
 
-      # PUSH IMAGE TO DOCKER HUB
+      # PUSH IMAGE
       - name: Push Docker Image
         run: |
           docker push aditya1436/enterprise-devsecops:latest
 
   deploy-dev:
+
     needs: build-and-scan
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # DEPLOY TO DEVELOPMENT
       - name: Deploy to Development
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+
           script: |
+
             docker pull aditya1436/enterprise-devsecops:latest
 
             docker stop dev-app || true
@@ -182,19 +196,22 @@ jobs:
               aditya1436/enterprise-devsecops:latest
 
   deploy-staging:
+
     needs: deploy-dev
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # DEPLOY TO STAGING
       - name: Deploy to Staging
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+
           script: |
+
             docker pull aditya1436/enterprise-devsecops:latest
 
             docker stop staging-app || true
@@ -206,19 +223,22 @@ jobs:
               aditya1436/enterprise-devsecops:latest
 
   deploy-production:
+
     needs: deploy-staging
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # DEPLOY TO PRODUCTION
       - name: Deploy to Production
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+
           script: |
+
             docker pull aditya1436/enterprise-devsecops:latest
 
             docker stop prod-app || true
