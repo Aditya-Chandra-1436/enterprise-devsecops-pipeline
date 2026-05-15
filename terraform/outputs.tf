@@ -1,3 +1,9 @@
-output "security_group_id" {
-  value = aws_security_group.devsecops_sg.id
+output "deployment_server_public_ip" {
+
+  value = aws_instance.deploy_server.public_ip
+}
+
+output "deployment_server_id" {
+
+  value = aws_instance.deploy_server.id
 }
