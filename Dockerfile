@@ -2,17 +2,25 @@
 
 FROM node:20-bookworm-slim AS builder
 
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install --omit=dev
+RUN npm ci --omit=dev
 
 COPY . .
 
 # PRODUCTION STAGE
 
-FROM gcr.io/distroless/nodejs20-debian12
+FROM node:20-bookworm-slim
+
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -20,6 +28,6 @@ COPY --from=builder /app /app
 
 EXPOSE 3000
 
-USER nonroot
+USER node
 
-CMD ["app.js"]
+CMD ["node", "app.js"]
