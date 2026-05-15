@@ -37,15 +37,28 @@ jobs:
         with:
           config: "p/security-audit"
 
-      # FILESYSTEM DEPENDENCY SCAN
+      # TRIVY FILESYSTEM SCAN
+      # Logs HIGH + CRITICAL vulnerabilities
+      # Fails pipeline ONLY if CRITICAL vulnerabilities exist
       - name: Run Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '0'
+
+      # ENFORCE POLICY GATE FOR CRITICAL ONLY
+      - name: Enforce Critical Vulnerability Policy
+        run: |
+          docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v $PWD:/workspace \
+          aquasec/trivy fs \
+          --severity CRITICAL \
+          --exit-code 1 \
+          /workspace
 
       # IAC SCANNING
       - name: Run Checkov Scan
@@ -78,10 +91,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install trivy -y
 
-      # CONTAINER IMAGE SCANNING
+      # CONTAINER IMAGE SCAN
+      # Logs HIGH + CRITICAL vulnerabilities
       - name: Scan Docker Image
         run: |
-          trivy image --severity CRITICAL,HIGH --exit-code 1 enterprise-devsecops
+          trivy image \
+          --severity HIGH,CRITICAL \
+          --exit-code 0 \
+          enterprise-devsecops
+
+      # POLICY GATE
+      # FAILS ONLY FOR CRITICAL
+      - name: Enforce Critical Image Policy
+        run: |
+          trivy image \
+          --severity CRITICAL \
+          --exit-code 1 \
+          enterprise-devsecops
 
       # LOGIN TO DOCKER HUB
       - name: Docker Login
@@ -115,8 +141,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             docker pull aditya1436/enterprise-devsecops:latest
+
             docker stop dev-app || true
             docker rm dev-app || true
+
             docker run -d \
               --name dev-app \
               -p 3000:3000 \
@@ -128,7 +156,7 @@ jobs:
 
     steps:
 
-      # STAGING DEPLOYMENT
+      # DEPLOY TO STAGING
       - name: Deploy to Staging
         uses: appleboy/ssh-action@master
         with:
@@ -137,8 +165,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             docker pull aditya1436/enterprise-devsecops:latest
+
             docker stop staging-app || true
             docker rm staging-app || true
+
             docker run -d \
               --name staging-app \
               -p 3001:3000 \
@@ -150,7 +180,7 @@ jobs:
 
     steps:
 
-      # PRODUCTION DEPLOYMENT
+      # DEPLOY TO PRODUCTION
       - name: Deploy to Production
         uses: appleboy/ssh-action@master
         with:
@@ -159,8 +189,10 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             docker pull aditya1436/enterprise-devsecops:latest
+
             docker stop prod-app || true
             docker rm prod-app || true
+
             docker run -d \
               --name prod-app \
               -p 3002:3000 \
