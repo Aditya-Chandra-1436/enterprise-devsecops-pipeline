@@ -37,9 +37,8 @@ jobs:
         with:
           config: "p/security-audit"
 
-      # TRIVY FILESYSTEM SCAN
+      # FILESYSTEM DEPENDENCY SCAN
       # Logs HIGH + CRITICAL vulnerabilities
-      # Fails pipeline ONLY if CRITICAL vulnerabilities exist
       - name: Run Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -49,16 +48,16 @@ jobs:
           severity: 'HIGH,CRITICAL'
           exit-code: '0'
 
-      # ENFORCE POLICY GATE FOR CRITICAL ONLY
-      - name: Enforce Critical Vulnerability Policy
-        run: |
-          docker run --rm \
-          -v /var/run/docker.sock:/var/run/docker.sock \
-          -v $PWD:/workspace \
-          aquasec/trivy fs \
-          --severity CRITICAL \
-          --exit-code 1 \
-          /workspace
+      # POLICY GATE
+      # FAILS PIPELINE ONLY FOR CRITICAL VULNERABILITIES
+      - name: Enforce Critical Filesystem Policy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL'
+          exit-code: '1'
 
       # IAC SCANNING
       - name: Run Checkov Scan
@@ -85,14 +84,17 @@ jobs:
       - name: Install Trivy
         run: |
           sudo apt-get update
-          sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+          sudo apt-get install wget apt-transport-https gnupg lsb-release jq -y
+
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+
           echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+
           sudo apt-get update
           sudo apt-get install trivy -y
 
       # CONTAINER IMAGE SCAN
-      # Logs HIGH + CRITICAL vulnerabilities
+      # LOGS HIGH + CRITICAL VULNERABILITIES
       - name: Scan Docker Image
         run: |
           trivy image \
@@ -101,7 +103,7 @@ jobs:
           enterprise-devsecops
 
       # POLICY GATE
-      # FAILS ONLY FOR CRITICAL
+      # FAILS ONLY FOR CRITICAL VULNERABILITIES
       - name: Enforce Critical Image Policy
         run: |
           trivy image \
@@ -109,19 +111,48 @@ jobs:
           --exit-code 1 \
           enterprise-devsecops
 
+      # INSTALL VAULT
+      - name: Install Vault
+        run: |
+          wget https://releases.hashicorp.com/vault/1.17.2/vault_1.17.2_linux_amd64.zip
+          unzip vault_1.17.2_linux_amd64.zip
+          sudo mv vault /usr/local/bin/
+
+      # AUTHENTICATE TO VAULT
+      - name: Authenticate to Vault
+        run: |
+          export VAULT_ADDR="http://${{ secrets.EC2_HOST }}:8200"
+
+          vault write auth/approle/login \
+            role_id="${{ secrets.VAULT_ROLE_ID }}" \
+            secret_id="${{ secrets.VAULT_SECRET_ID }}" \
+            -format=json > vault-token.json
+
+          VAULT_TOKEN=$(cat vault-token.json | jq -r '.auth.client_token')
+
+          echo "VAULT_ADDR=http://${{ secrets.EC2_HOST }}:8200" >> $GITHUB_ENV
+          echo "VAULT_TOKEN=$VAULT_TOKEN" >> $GITHUB_ENV
+
+      # FETCH DOCKERHUB CREDENTIALS FROM VAULT
+      - name: Fetch Docker Credentials
+        run: |
+          USERNAME=$(vault kv get -field=username secret/dockerhub)
+          PASSWORD=$(vault kv get -field=password secret/dockerhub)
+
+          echo "DOCKER_USERNAME=$USERNAME" >> $GITHUB_ENV
+          echo "DOCKER_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+
       # LOGIN TO DOCKER HUB
       - name: Docker Login
-        uses: docker/login-action@v3
-        with:
-          username: aditya1436
-          password: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
 
       # TAG IMAGE
       - name: Tag Docker Image
         run: |
           docker tag enterprise-devsecops aditya1436/enterprise-devsecops:latest
 
-      # PUSH IMAGE
+      # PUSH IMAGE TO DOCKER HUB
       - name: Push Docker Image
         run: |
           docker push aditya1436/enterprise-devsecops:latest
