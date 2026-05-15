@@ -1,0 +1,13 @@
+node_modules
+.git
+.github
+terraform
+terraform-keys
+devsecops-ssh-keys
+*.tfstate
+*.tfstate.backup
+.terraform
+.gitignore
+README.md
+trivy-fs-report.txt
+trivy-image-report.txt
