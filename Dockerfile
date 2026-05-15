@@ -1,4 +1,6 @@
-FROM node:20-alpine
+# BUILD STAGE
+
+FROM node:20-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -8,12 +10,16 @@ RUN npm install --omit=dev
 
 COPY . .
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# PRODUCTION STAGE
 
-USER appuser
+FROM gcr.io/distroless/nodejs20-debian12
+
+WORKDIR /app
+
+COPY --from=builder /app /app
 
 EXPOSE 3000
 
-HEALTHCHECK CMD node app.js || exit 1
+USER nonroot
 
-CMD ["node", "app.js"]
+CMD ["app.js"]
