@@ -1,25 +1,19 @@
-# BUILD STAGE
-
-FROM node:20-alpine AS builder
+FROM node:20-alpine
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm ci --omit=dev
+RUN npm install --omit=dev
 
 COPY . .
 
-# PRODUCTION STAGE
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
-FROM gcr.io/distroless/nodejs20-debian12
-
-WORKDIR /app
-
-COPY --from=builder /app /app
+USER appuser
 
 EXPOSE 3000
 
-USER nonroot
+HEALTHCHECK CMD node app.js || exit 1
 
-CMD ["app.js"]
+CMD ["node", "app.js"]
