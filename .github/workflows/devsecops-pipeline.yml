@@ -1,0 +1,119 @@
+name: Enterprise DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+
+  security-scans:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: "p/security-audit"
+
+      - name: Run Trivy Filesystem Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Run Checkov Scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: .
+
+  build-and-scan:
+    needs: security-scans
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: |
+          docker build -t enterprise-devsecops .
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy -y
+
+      - name: Scan Docker Image
+        run: |
+          trivy image --severity CRITICAL,HIGH --exit-code 1 enterprise-devsecops
+
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: aditya1436
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Tag Docker Image
+        run: |
+          docker tag enterprise-devsecops aditya1436/enterprise-devsecops:latest
+
+      - name: Push Docker Image
+        run: |
+          docker push aditya1436/enterprise-devsecops:latest
+
+  deploy-dev:
+    needs: build-and-scan
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Deploy to Development
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker pull aditya1436/enterprise-devsecops:latest
+            docker stop dev-app || true
+            docker rm dev-app || true
+            docker run -d --name dev-app -p 3000:3000 aditya1436/enterprise-devsecops:latest
+
+  deploy-staging:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Deploy to Staging
+        run: |
+          echo "Staging deployment approved"
+
+  deploy-production:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Deploy to Production
+        run: |
+          echo "Production deployment approved"

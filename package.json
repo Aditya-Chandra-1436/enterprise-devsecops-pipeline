@@ -1,0 +1,12 @@
+{
+  "name": "enterprise-devsecops-pipeline",
+  "version": "1.0.0",
+  "description": "Enterprise DevSecOps CI/CD Pipeline",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "lodash": "^4.17.21"
+  }
+}
