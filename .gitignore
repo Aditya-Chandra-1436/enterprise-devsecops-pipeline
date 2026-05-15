@@ -10,7 +10,13 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 .terraform.lock.hcl
-
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/.terraform.lock.hcl
+# SSH Keys
+terraform-keys/
+devsecops-ssh-keys/
 # Sensitive files
 *.pem
 *.key
