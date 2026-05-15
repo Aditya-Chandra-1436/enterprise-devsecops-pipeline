@@ -1,10 +1,6 @@
 # BUILD STAGE
 
-FROM node:20-bookworm-slim AS builder
-
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    rm -rf /var/lib/apt/lists/*
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -16,11 +12,7 @@ COPY . .
 
 # PRODUCTION STAGE
 
-FROM node:20-bookworm-slim
-
-RUN apt-get update && \
-    apt-get upgrade -y && \
-    rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/nodejs20-debian12
 
 WORKDIR /app
 
@@ -28,6 +20,6 @@ COPY --from=builder /app /app
 
 EXPOSE 3000
 
-USER node
+USER nonroot
 
-CMD ["node", "app.js"]
+CMD ["app.js"]
