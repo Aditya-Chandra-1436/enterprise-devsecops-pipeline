@@ -1,25 +1,24 @@
 resource "aws_key_pair" "deploy_key" {
 
-  key_name   = "devsecops-deploy-key"
+  key_name = "enterprise-devsecops-key"
 
-  public_key = file("../terraform-keys/devsecops-deploy-key.pub")
+  public_key = file("/home/ubuntu/devsecops-ssh-keys/deploy-key.pub")
 }
 
 resource "aws_security_group" "deploy_sg" {
 
-  name        = "enterprise-devsecops-deploy-sg"
+  name = "enterprise-devsecops-deploy-sg"
 
-  description = "Security Group for Deployment EC2"
+  description = "Security Group for Enterprise DevSecOps Deployment Server"
 
   ingress {
 
     description = "SSH Access"
 
-    from_port   = 22
+    from_port = 22
+    to_port = 22
 
-    to_port     = 22
-
-    protocol    = "tcp"
+    protocol = "tcp"
 
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -28,11 +27,10 @@ resource "aws_security_group" "deploy_sg" {
 
     description = "Development Environment"
 
-    from_port   = 3000
+    from_port = 3000
+    to_port = 3000
 
-    to_port     = 3000
-
-    protocol    = "tcp"
+    protocol = "tcp"
 
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -41,11 +39,10 @@ resource "aws_security_group" "deploy_sg" {
 
     description = "Staging Environment"
 
-    from_port   = 3001
+    from_port = 3001
+    to_port = 3001
 
-    to_port     = 3001
-
-    protocol    = "tcp"
+    protocol = "tcp"
 
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -54,11 +51,10 @@ resource "aws_security_group" "deploy_sg" {
 
     description = "Production Environment"
 
-    from_port   = 3002
+    from_port = 3002
+    to_port = 3002
 
-    to_port     = 3002
-
-    protocol    = "tcp"
+    protocol = "tcp"
 
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -67,11 +63,10 @@ resource "aws_security_group" "deploy_sg" {
 
     description = "HTTPS Outbound"
 
-    from_port   = 443
+    from_port = 443
+    to_port = 443
 
-    to_port     = 443
-
-    protocol    = "tcp"
+    protocol = "tcp"
 
     cidr_blocks = ["0.0.0.0/0"]
   }
@@ -84,7 +79,7 @@ resource "aws_security_group" "deploy_sg" {
 
 resource "aws_instance" "deploy_server" {
 
-  ami           = "ami-0e86e20dae9224db8"
+  ami = "ami-0d1b5a8c13042c939"
 
   instance_type = "t3.micro"
 
@@ -98,6 +93,6 @@ resource "aws_instance" "deploy_server" {
 
   tags = {
 
-    Name = "Enterprise-DevSecOps-Deploy-Server"
+    Name = "Enterprise-DevSecOps-Deployment-Server"
   }
 }
