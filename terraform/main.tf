@@ -1,3 +1,8 @@
+resource "random_id" "key_suffix" {
+
+  byte_length = 4
+}
+
 resource "aws_security_group" "deploy_sg" {
 
   name        = "enterprise-devsecops-deploy-sg"
@@ -45,7 +50,7 @@ resource "aws_security_group" "deploy_sg" {
 
 resource "aws_key_pair" "deploy_key" {
 
-  key_name = "enterprise-devsecops-key"
+  key_name = "enterprise-devsecops-key-${random_id.key_suffix.hex}"
 
   public_key = file("keys/id_rsa.pub")
 }
@@ -54,7 +59,7 @@ resource "aws_instance" "deploy_server" {
 
   ami = "ami-0d1b5a8c13042c939"
 
-  instance_type = "t2.micro"
+  instance_type = "t3.micro"
 
   key_name = aws_key_pair.deploy_key.key_name
 
