@@ -5,9 +5,9 @@ resource "random_id" "suffix" {
 
 resource "aws_security_group" "deploy_sg" {
 
-  name = "enterprise-devsecops-deploy-sg-${random_id.suffix.hex}"
+  name = "enterprise-devsecops-auto-sg-${random_id.suffix.hex}"
 
-  description = "Security group for DevSecOps deployment server"
+  description = "Security group for automated DevSecOps deployment"
 
   ingress {
 
@@ -44,13 +44,13 @@ resource "aws_security_group" "deploy_sg" {
 
   tags = {
 
-    Name = "Enterprise-DevSecOps-SG"
+    Name = "Enterprise-DevSecOps-Auto-SG"
   }
 }
 
 resource "aws_key_pair" "deploy_key" {
 
-  key_name = "enterprise-devsecops-key-${random_id.suffix.hex}"
+  key_name = "enterprise-devsecops-auto-key-${random_id.suffix.hex}"
 
   public_key = file("keys/id_rsa.pub")
 }
