@@ -14,6 +14,4 @@ USER appuser
 
 EXPOSE 3000
 
-HEALTHCHECK CMD node app.js || exit 1
-
 CMD ["node", "app.js"]
