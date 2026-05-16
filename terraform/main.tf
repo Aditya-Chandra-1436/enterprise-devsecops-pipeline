@@ -1,11 +1,11 @@
-resource "random_id" "key_suffix" {
+resource "random_id" "suffix" {
 
   byte_length = 4
 }
 
 resource "aws_security_group" "deploy_sg" {
 
-  name        = "enterprise-devsecops-deploy-sg"
+  name = "enterprise-devsecops-deploy-sg-${random_id.suffix.hex}"
 
   description = "Security group for DevSecOps deployment server"
 
@@ -50,7 +50,7 @@ resource "aws_security_group" "deploy_sg" {
 
 resource "aws_key_pair" "deploy_key" {
 
-  key_name = "enterprise-devsecops-key-${random_id.key_suffix.hex}"
+  key_name = "enterprise-devsecops-key-${random_id.suffix.hex}"
 
   public_key = file("keys/id_rsa.pub")
 }
