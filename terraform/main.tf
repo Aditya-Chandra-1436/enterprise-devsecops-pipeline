@@ -3,11 +3,15 @@ resource "random_id" "suffix" {
   byte_length = 4
 }
 
+##############################################################
+# SECURITY GROUP
+##############################################################
+
 resource "aws_security_group" "deploy_sg" {
 
-  name = "enterprise-devsecops-auto-sg-${random_id.suffix.hex}"
+  name = "enterprise-auto-devsecops-sg-${random_id.suffix.hex}"
 
-  description = "Security group for automated DevSecOps deployment"
+  description = "Automated DevSecOps Security Group"
 
   ingress {
 
@@ -22,9 +26,31 @@ resource "aws_security_group" "deploy_sg" {
 
   ingress {
 
-    description = "Application Access"
+    description = "Dev Environment"
 
     from_port   = 3000
+    to_port     = 3000
+    protocol    = "tcp"
+
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+
+    description = "Staging Environment"
+
+    from_port   = 3001
+    to_port     = 3001
+    protocol    = "tcp"
+
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+
+    description = "Production Environment"
+
+    from_port   = 3002
     to_port     = 3002
     protocol    = "tcp"
 
@@ -33,7 +59,7 @@ resource "aws_security_group" "deploy_sg" {
 
   egress {
 
-    description = "Outbound Access"
+    description = "Outbound Internet Access"
 
     from_port   = 0
     to_port     = 0
@@ -44,16 +70,24 @@ resource "aws_security_group" "deploy_sg" {
 
   tags = {
 
-    Name = "Enterprise-DevSecOps-Auto-SG"
+    Name = "Enterprise-Automated-DevSecOps-SG"
   }
 }
 
+##############################################################
+# KEY PAIR
+##############################################################
+
 resource "aws_key_pair" "deploy_key" {
 
-  key_name = "enterprise-devsecops-auto-key-${random_id.suffix.hex}"
+  key_name = "enterprise-auto-devsecops-key-${random_id.suffix.hex}"
 
   public_key = file("keys/id_rsa.pub")
 }
+
+##############################################################
+# EC2 INSTANCE
+##############################################################
 
 resource "aws_instance" "deploy_server" {
 
@@ -90,6 +124,6 @@ resource "aws_instance" "deploy_server" {
 
   tags = {
 
-    Name = "Enterprise-DevSecOps-Deployment-Server"
+    Name = "Enterprise-Automated-Deployment-Server"
   }
 }

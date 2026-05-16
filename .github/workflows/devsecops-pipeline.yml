@@ -12,6 +12,10 @@ permissions:
 
 jobs:
 
+  ##############################################################
+  # SECURITY SCAN STAGE
+  ##############################################################
+
   security-scan:
 
     runs-on: ubuntu-latest
@@ -58,6 +62,10 @@ jobs:
           framework: terraform,dockerfile
           soft_fail: true
 
+  ##############################################################
+  # BUILD AND PUSH STAGE
+  ##############################################################
+
   build-and-push:
 
     runs-on: ubuntu-latest
@@ -68,6 +76,10 @@ jobs:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      ##########################################################
+      # FETCH DOCKERHUB CREDS FROM VAULT
+      ##########################################################
 
       - name: Fetch DockerHub Credentials From Vault
         run: |
@@ -90,31 +102,51 @@ jobs:
 
           echo "DOCKER_PASSWORD=$(jq -r '.data.data.password' dockerhub.json)" >> $GITHUB_ENV
 
+      ##########################################################
+      # DOCKER LOGIN
+      ##########################################################
+
       - name: DockerHub Login
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_USERNAME }}
           password: ${{ env.DOCKER_PASSWORD }}
 
+      ##########################################################
+      # BUILD IMAGE
+      ##########################################################
+
       - name: Build Docker Image
         run: |
 
           docker build \
-          -t $DOCKER_USERNAME/enterprise-devsecops-app:latest \
+          -t aditya1436/enterprise-devsecops-app:latest \
           .
+
+      ##########################################################
+      # TRIVY IMAGE SCAN
+      ##########################################################
 
       - name: Run Trivy Image Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/enterprise-devsecops-app:latest
+          image-ref: aditya1436/enterprise-devsecops-app:latest
           format: table
           exit-code: 0
+
+      ##########################################################
+      # PUSH IMAGE
+      ##########################################################
 
       - name: Push Docker Image
         run: |
 
           docker push \
-          $DOCKER_USERNAME/enterprise-devsecops-app:latest
+          aditya1436/enterprise-devsecops-app:latest
+
+  ##############################################################
+  # TERRAFORM PROVISIONING
+  ##############################################################
 
   terraform-provision:
 
@@ -129,6 +161,10 @@ jobs:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
+
+      ##########################################################
+      # FETCH AWS CREDS FROM VAULT
+      ##########################################################
 
       - name: Fetch AWS Credentials From Vault
         run: |
@@ -151,8 +187,16 @@ jobs:
 
           echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.data.data.AWS_SECRET_ACCESS_KEY' aws.json)" >> $GITHUB_ENV
 
+      ##########################################################
+      # TERRAFORM SETUP
+      ##########################################################
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+
+      ##########################################################
+      # CREATE SSH PRIVATE KEY
+      ##########################################################
 
       - name: Create SSH Private Key
         run: |
@@ -161,10 +205,18 @@ jobs:
 
           chmod 400 private_key.pem
 
+      ##########################################################
+      # CREATE SSH PUBLIC KEY
+      ##########################################################
+
       - name: Create SSH Public Key
         run: |
 
           ssh-keygen -y -f private_key.pem > public_key.pub
+
+      ##########################################################
+      # MOVE PUBLIC KEY
+      ##########################################################
 
       - name: Move Public Key
         run: |
@@ -172,6 +224,10 @@ jobs:
           mkdir -p terraform/keys
 
           cp public_key.pub terraform/keys/id_rsa.pub
+
+      ##########################################################
+      # TERRAFORM INIT
+      ##########################################################
 
       - name: Terraform Init
         working-directory: terraform
@@ -182,6 +238,10 @@ jobs:
 
           terraform init
 
+      ##########################################################
+      # TERRAFORM VALIDATE
+      ##########################################################
+
       - name: Terraform Validate
         working-directory: terraform
         env:
@@ -191,6 +251,10 @@ jobs:
 
           terraform validate
 
+      ##########################################################
+      # TERRAFORM APPLY
+      ##########################################################
+
       - name: Terraform Apply
         working-directory: terraform
         env:
@@ -199,6 +263,10 @@ jobs:
         run: |
 
           terraform apply -auto-approve
+
+      ##########################################################
+      # GET EC2 PUBLIC IP
+      ##########################################################
 
       - name: Get EC2 Public IP
         id: getip
@@ -212,6 +280,10 @@ jobs:
 
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
+  ##############################################################
+  # DEPLOYMENT STAGE
+  ##############################################################
+
   deploy:
 
     runs-on: ubuntu-latest
@@ -220,24 +292,9 @@ jobs:
 
     steps:
 
-      - name: Fetch DockerHub Credentials From Vault
-        run: |
-
-          sudo apt-get update
-
-          sudo apt-get install jq -y
-
-          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
-
-          export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
-
-          curl \
-          --silent \
-          --header "X-Vault-Token: $VAULT_TOKEN" \
-          $VAULT_ADDR/v1/secret/data/dockerhub \
-          > dockerhub.json
-
-          echo "DOCKER_USERNAME=$(jq -r '.data.data.username' dockerhub.json)" >> $GITHUB_ENV
+      ##########################################################
+      # CREATE SSH KEY
+      ##########################################################
 
       - name: Create SSH Key
         run: |
@@ -246,10 +303,18 @@ jobs:
 
           chmod 400 private_key.pem
 
+      ##########################################################
+      # WAIT FOR EC2 + DOCKER INSTALL
+      ##########################################################
+
       - name: Wait For EC2 Initialization
         run: |
 
-          sleep 120
+          sleep 180
+
+      ##########################################################
+      # DEPLOY CONTAINERS
+      ##########################################################
 
       - name: Deploy Containers
         uses: appleboy/ssh-action@master
@@ -259,7 +324,7 @@ jobs:
           key_path: private_key.pem
           script: |
 
-            docker pull $DOCKER_USERNAME/enterprise-devsecops-app:latest
+            docker pull aditya1436/enterprise-devsecops-app:latest
 
             docker rm -f dev-container || true
 
@@ -270,17 +335,21 @@ jobs:
             docker run -d \
             --name dev-container \
             -p 3000:3000 \
-            $DOCKER_USERNAME/enterprise-devsecops-app:latest
+            aditya1436/enterprise-devsecops-app:latest
 
             docker run -d \
             --name staging-container \
             -p 3001:3000 \
-            $DOCKER_USERNAME/enterprise-devsecops-app:latest
+            aditya1436/enterprise-devsecops-app:latest
 
             docker run -d \
             --name production-container \
             -p 3002:3000 \
-            $DOCKER_USERNAME/enterprise-devsecops-app:latest
+            aditya1436/enterprise-devsecops-app:latest
+
+      ##########################################################
+      # SUCCESS MESSAGE
+      ##########################################################
 
       - name: Deployment Completed
         run: |
