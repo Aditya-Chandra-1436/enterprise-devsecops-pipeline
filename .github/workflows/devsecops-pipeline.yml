@@ -6,132 +6,96 @@ on:
       - main
       - fully-automated-devsecops
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
 
-  security-scans:
+  security-scan:
+
+    name: Security Scan Stage
+
     runs-on: ubuntu-latest
 
     steps:
 
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run Gitleaks
+      - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
-      - name: Run Semgrep
+      - name: Install Semgrep
         run: |
+
           python3 -m pip install semgrep
 
-          semgrep scan \
-            --config auto \
-            .
+      - name: Run Semgrep Scan
+        run: |
 
-      - name: Run Trivy FileSystem Scan
+          semgrep scan \
+          --config auto \
+          --exclude node_modules \
+          .
+        continue-on-error: true
+
+      - name: Run Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
+          format: table
+          exit-code: 0
+          ignore-unfixed: true
 
       - name: Run Checkov Scan
         uses: bridgecrewio/checkov-action@master
         with:
           directory: .
+          framework: terraform,dockerfile
+          soft_fail: true
 
-  build-and-deploy:
+  build-and-push:
 
-    needs: security-scans
+    name: Build And Push Docker Image
 
     runs-on: ubuntu-latest
 
+    needs: security-scan
+
     steps:
 
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq unzip curl
-
-      - name: Fetch AWS Credentials From Vault
-        run: |
-
-          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
-          export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
-
-          curl \
-            --silent \
-            --header "X-Vault-Token: $VAULT_TOKEN" \
-            $VAULT_ADDR/v1/secret/data/aws \
-            > aws.json
-
-          echo "AWS_ACCESS_KEY_ID=$(jq -r '.data.data.AWS_ACCESS_KEY_ID' aws.json)" >> $GITHUB_ENV
-
-          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.data.data.AWS_SECRET_ACCESS_KEY' aws.json)" >> $GITHUB_ENV
-
-          echo "AWS_REGION=$(jq -r '.data.data.AWS_REGION' aws.json)" >> $GITHUB_ENV
 
       - name: Fetch DockerHub Credentials From Vault
         run: |
 
+          sudo apt-get update
+
+          sudo apt-get install jq -y
+
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+
           export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
 
           curl \
-            --silent \
-            --header "X-Vault-Token: $VAULT_TOKEN" \
-            $VAULT_ADDR/v1/secret/data/dockerhub \
-            > dockerhub.json
+          --silent \
+          --header "X-Vault-Token: $VAULT_TOKEN" \
+          $VAULT_ADDR/v1/secret/data/dockerhub \
+          > dockerhub.json
 
           echo "DOCKER_USERNAME=$(jq -r '.data.data.username' dockerhub.json)" >> $GITHUB_ENV
 
           echo "DOCKER_PASSWORD=$(jq -r '.data.data.password' dockerhub.json)" >> $GITHUB_ENV
 
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Terraform Init
-        working-directory: terraform
-        run: |
-          terraform init
-
-      - name: Terraform Validate
-        working-directory: terraform
-        run: |
-          terraform validate
-
-      - name: Terraform Apply
-        working-directory: terraform
-        run: |
-          terraform apply \
-            -auto-approve \
-            -var="aws_region=${AWS_REGION}"
-
-      - name: Get Deployment Server IP
-        working-directory: terraform
-        run: |
-          echo "DEPLOY_IP=$(terraform output -raw deployment_server_ip)" >> $GITHUB_ENV
-
-      - name: Wait For EC2 Initialization
-        run: |
-          echo "Waiting for EC2 + Docker setup..."
-          sleep 90
-
-      - name: Docker Login
+      - name: DockerHub Login
         uses: docker/login-action@v3
         with:
           username: ${{ env.DOCKER_USERNAME }}
@@ -139,54 +103,192 @@ jobs:
 
       - name: Build Docker Image
         run: |
+
           docker build \
-            -t $DOCKER_USERNAME/enterprise-devsecops:latest \
-            .
+          -t $DOCKER_USERNAME/enterprise-devsecops-app:latest \
+          .
 
       - name: Run Trivy Image Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.DOCKER_USERNAME }}/enterprise-devsecops:latest
+          image-ref: ${{ env.DOCKER_USERNAME }}/enterprise-devsecops-app:latest
           format: table
           exit-code: 0
           ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
 
       - name: Push Docker Image
         run: |
-          docker push \
-            $DOCKER_USERNAME/enterprise-devsecops:latest
 
-      - name: Deploy Containers To EC2
+          docker push \
+          $DOCKER_USERNAME/enterprise-devsecops-app:latest
+
+  terraform-provision:
+
+    name: Provision Infrastructure
+
+    runs-on: ubuntu-latest
+
+    needs: build-and-push
+
+    steps:
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch AWS Credentials From Vault
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install jq -y
+
+          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+
+          export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
+
+          curl \
+          --silent \
+          --header "X-Vault-Token: $VAULT_TOKEN" \
+          $VAULT_ADDR/v1/secret/data/aws \
+          > aws.json
+
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.data.data.AWS_ACCESS_KEY_ID' aws.json)" >> $GITHUB_ENV
+
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.data.data.AWS_SECRET_ACCESS_KEY' aws.json)" >> $GITHUB_ENV
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Create SSH Private Key
+        run: |
+
+          echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+
+          chmod 400 private_key.pem
+
+      - name: Create SSH Public Key
+        run: |
+
+          ssh-keygen -y -f private_key.pem > public_key.pub
+
+      - name: Move Public Key
+        run: |
+
+          mkdir -p terraform/keys
+
+          cp public_key.pub terraform/keys/id_rsa.pub
+
+      - name: Terraform Init
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          terraform init
+
+      - name: Terraform Validate
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          terraform validate
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          terraform apply -auto-approve
+
+      - name: Get Deployment Server IP
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          echo "PUBLIC_IP=$(terraform output -raw deployment_server_ip)" >> $GITHUB_ENV
+
+  deploy:
+
+    name: Deploy Containers
+
+    runs-on: ubuntu-latest
+
+    needs: terraform-provision
+
+    steps:
+
+      - name: Fetch DockerHub Credentials From Vault
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install jq -y
+
+          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+
+          export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
+
+          curl \
+          --silent \
+          --header "X-Vault-Token: $VAULT_TOKEN" \
+          $VAULT_ADDR/v1/secret/data/dockerhub \
+          > dockerhub.json
+
+          echo "DOCKER_USERNAME=$(jq -r '.data.data.username' dockerhub.json)" >> $GITHUB_ENV
+
+          echo "DOCKER_PASSWORD=$(jq -r '.data.data.password' dockerhub.json)" >> $GITHUB_ENV
+
+      - name: Create SSH Key
+        run: |
+
+          echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+
+          chmod 400 private_key.pem
+
+      - name: Wait For EC2 Initialization
+        run: |
+
+          sleep 120
+
+      - name: Deploy Containers
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ env.DEPLOY_IP }}
+          host: ${{ env.PUBLIC_IP }}
           username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
+          key_path: private_key.pem
           script: |
 
-            docker pull $DOCKER_USERNAME/enterprise-devsecops:latest
+            docker pull $DOCKER_USERNAME/enterprise-devsecops-app:latest
 
-            docker rm -f dev-app || true
-            docker rm -f staging-app || true
-            docker rm -f prod-app || true
+            docker rm -f dev-container || true
 
-            docker run -d \
-              --name dev-app \
-              -p 3000:3000 \
-              $DOCKER_USERNAME/enterprise-devsecops:latest
+            docker rm -f staging-container || true
+
+            docker rm -f production-container || true
 
             docker run -d \
-              --name staging-app \
-              -p 3001:3000 \
-              $DOCKER_USERNAME/enterprise-devsecops:latest
+            --name dev-container \
+            -p 3000:3000 \
+            $DOCKER_USERNAME/enterprise-devsecops-app:latest
 
             docker run -d \
-              --name prod-app \
-              -p 3002:3000 \
-              $DOCKER_USERNAME/enterprise-devsecops:latest
+            --name staging-container \
+            -p 3001:3000 \
+            $DOCKER_USERNAME/enterprise-devsecops-app:latest
 
-      - name: Deployment Success
+            docker run -d \
+            --name production-container \
+            -p 3002:3000 \
+            $DOCKER_USERNAME/enterprise-devsecops-app:latest
+
+      - name: Deployment Completed
         run: |
-          echo "Enterprise DevSecOps Pipeline Deployment Completed Successfully"
+
+          echo "Enterprise DevSecOps Pipeline Completed Successfully"

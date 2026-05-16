@@ -21,6 +21,6 @@ devsecops-ssh-keys/
 # Sensitive files
 *.pem
 *.key
-
+private_key.pem
 # OS files
 .DS_Store
