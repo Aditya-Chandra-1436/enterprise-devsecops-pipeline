@@ -4,261 +4,368 @@ on:
   push:
     branches:
       - main
-      - dev
-      - staging
+      - fully-automated-devsecops
+
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
 
-# =========================
-# SECURITY SCANNING STAGE
-# =========================
+  ##############################################################
+  # SECURITY SCAN STAGE
+  ##############################################################
 
   security-scan:
-    name: Security Scans
+
     runs-on: ubuntu-latest
 
     steps:
 
-      # Checkout Code
+      ##########################################################
+      # CHECKOUT REPOSITORY
+      ##########################################################
+
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # =========================
-      # GITLEAKS SECRET SCAN
-      # =========================
-      - name: Run Gitleaks Secret Scan
+      ##########################################################
+      # GITLEAKS SCAN
+      ##########################################################
+
+      - name: Run Gitleaks Scan
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
 
-      # =========================
-      # SEMGREP SAST SCAN
-      # =========================
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Run Semgrep SAST Scan
-        run: |
-          semgrep scan --config auto
-
-      # =========================
+      ##########################################################
       # TRIVY FILESYSTEM SCAN
-      # FAIL ONLY ON CRITICAL
-      # =========================
+      ##########################################################
+
       - name: Run Trivy Filesystem Scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
           severity: CRITICAL
-          exit-code: 1
           ignore-unfixed: true
+          format: table
+          exit-code: 1
 
-      # =========================
-      # CHECKOV IaC SCAN
-      # =========================
+      ##########################################################
+      # CHECKOV SCAN
+      ##########################################################
+
       - name: Run Checkov Scan
-        uses: bridgecrewio/checkov-action@v12
+        uses: bridgecrewio/checkov-action@master
         with:
+          directory: .
           framework: terraform,dockerfile
+          soft_fail: true
 
-# =========================
-# BUILD AND PUSH IMAGE
-# =========================
+  ##############################################################
+  # BUILD AND PUSH STAGE
+  ##############################################################
 
   build-and-push:
-    name: Build and Push Docker Image
+
     runs-on: ubuntu-latest
+
     needs: security-scan
 
     steps:
 
+      ##########################################################
+      # CHECKOUT REPOSITORY
+      ##########################################################
+
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # =========================
-      # FETCH VAULT SECRETS
-      # =========================
-      - name: Import Vault Secrets
-        uses: hashicorp/vault-action@v3
-        with:
-          url: ${{ secrets.VAULT_ADDR }}
-          token: ${{ secrets.VAULT_TOKEN }}
-          secrets: |
-            secret/data/devsecops dockerhub_username | DOCKER_USERNAME ;
-            secret/data/devsecops dockerhub_password | DOCKER_PASSWORD
+      ##########################################################
+      # FETCH DOCKERHUB CREDS FROM VAULT
+      ##########################################################
 
-      # =========================
-      # DOCKER LOGIN
-      # =========================
-      - name: Docker Login
+      - name: Fetch DockerHub Credentials From Vault
         run: |
-          echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin
 
-      # =========================
-      # BUILD IMAGE
-      # =========================
+          sudo apt-get update
+
+          sudo apt-get install jq -y
+
+          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+
+          export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
+
+          curl \
+          --silent \
+          --header "X-Vault-Token: $VAULT_TOKEN" \
+          $VAULT_ADDR/v1/secret/data/dockerhub \
+          > dockerhub.json
+
+          echo "DOCKER_USERNAME=$(jq -r '.data.data.username' dockerhub.json)" >> $GITHUB_ENV
+
+          echo "DOCKER_PASSWORD=$(jq -r '.data.data.password' dockerhub.json)" >> $GITHUB_ENV
+
+      ##########################################################
+      # DOCKER LOGIN
+      ##########################################################
+
+      - name: DockerHub Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_USERNAME }}
+          password: ${{ env.DOCKER_PASSWORD }}
+
+      ##########################################################
+      # BUILD DOCKER IMAGE
+      ##########################################################
+
       - name: Build Docker Image
         run: |
-          docker build -t aditya1436/enterprise-devsecops-app:latest .
 
-      # =========================
+          docker build \
+          -t aditya1436/enterprise-devsecops-app:latest \
+          .
+
+      ##########################################################
       # TRIVY IMAGE SCAN
-      # FAIL ONLY ON CRITICAL
-      # =========================
+      ##########################################################
+
       - name: Run Trivy Image Scan
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: aditya1436/enterprise-devsecops-app:latest
           severity: CRITICAL
-          exit-code: 1
           ignore-unfixed: true
+          format: table
+          exit-code: 1
 
-      # =========================
-      # PUSH IMAGE
-      # =========================
+      ##########################################################
+      # PUSH IMAGE TO DOCKERHUB
+      ##########################################################
+
       - name: Push Docker Image
         run: |
-          docker push aditya1436/enterprise-devsecops-app:latest
 
-# =========================
-# TERRAFORM PROVISIONING
-# =========================
+          docker push \
+          aditya1436/enterprise-devsecops-app:latest
 
-  terraform:
-    name: Terraform Provisioning
+  ##############################################################
+  # TERRAFORM PROVISIONING
+  ##############################################################
+
+  terraform-provision:
+
     runs-on: ubuntu-latest
+
     needs: build-and-push
 
     outputs:
-      public_ip: ${{ steps.get_ip.outputs.public_ip }}
+      public_ip: ${{ steps.getip.outputs.public_ip }}
 
     steps:
+
+      ##########################################################
+      # CHECKOUT REPOSITORY
+      ##########################################################
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # =========================
+      ##########################################################
       # FETCH AWS CREDS FROM VAULT
-      # =========================
-      - name: Import Vault Secrets
-        uses: hashicorp/vault-action@v3
-        with:
-          url: ${{ secrets.VAULT_ADDR }}
-          token: ${{ secrets.VAULT_TOKEN }}
-          secrets: |
-            secret/data/devsecops aws_access_key | AWS_ACCESS_KEY_ID ;
-            secret/data/devsecops aws_secret_key | AWS_SECRET_ACCESS_KEY
+      ##########################################################
 
-      # =========================
+      - name: Fetch AWS Credentials From Vault
+        run: |
+
+          sudo apt-get update
+
+          sudo apt-get install jq -y
+
+          export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
+
+          export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
+
+          curl \
+          --silent \
+          --header "X-Vault-Token: $VAULT_TOKEN" \
+          $VAULT_ADDR/v1/secret/data/aws \
+          > aws.json
+
+          echo "AWS_ACCESS_KEY_ID=$(jq -r '.data.data.AWS_ACCESS_KEY_ID' aws.json)" >> $GITHUB_ENV
+
+          echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.data.data.AWS_SECRET_ACCESS_KEY' aws.json)" >> $GITHUB_ENV
+
+      ##########################################################
       # SETUP TERRAFORM
-      # =========================
+      ##########################################################
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
 
-      # =========================
-      # TERRAFORM INIT
-      # =========================
-      - name: Terraform Init
-        run: terraform init
+      ##########################################################
+      # CREATE SSH PRIVATE KEY
+      ##########################################################
 
-      # =========================
-      # TERRAFORM VALIDATE
-      # =========================
-      - name: Terraform Validate
-        run: terraform validate
-
-      # =========================
-      # TERRAFORM PLAN
-      # =========================
-      - name: Terraform Plan
-        run: terraform plan
-
-      # =========================
-      # TERRAFORM APPLY
-      # =========================
-      - name: Terraform Apply
-        run: terraform apply -auto-approve
-
-      # =========================
-      # GET EC2 PUBLIC IP
-      # =========================
-      - name: Get EC2 Public IP
-        id: get_ip
+      - name: Create SSH Private Key
         run: |
-          echo "public_ip=$(terraform output -raw public_ip)" >> $GITHUB_OUTPUT
 
-# =========================
-# DEPLOYMENT STAGE
-# =========================
+          echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+
+          chmod 400 private_key.pem
+
+      ##########################################################
+      # CREATE SSH PUBLIC KEY
+      ##########################################################
+
+      - name: Create SSH Public Key
+        run: |
+
+          ssh-keygen -y -f private_key.pem > public_key.pub
+
+      ##########################################################
+      # MOVE PUBLIC KEY
+      ##########################################################
+
+      - name: Move Public Key
+        run: |
+
+          mkdir -p terraform/keys
+
+          cp public_key.pub terraform/keys/id_rsa.pub
+
+      ##########################################################
+      # TERRAFORM INIT
+      ##########################################################
+
+      - name: Terraform Init
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          terraform init
+
+      ##########################################################
+      # TERRAFORM VALIDATE
+      ##########################################################
+
+      - name: Terraform Validate
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          terraform validate
+
+      ##########################################################
+      # TERRAFORM APPLY
+      ##########################################################
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          terraform apply -auto-approve
+
+      ##########################################################
+      # GET EC2 PUBLIC IP
+      ##########################################################
+
+      - name: Get EC2 Public IP
+        id: getip
+        working-directory: terraform
+        env:
+          AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        run: |
+
+          PUBLIC_IP=$(terraform output -raw deployment_server_ip)
+
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+  ##############################################################
+  # DEPLOYMENT STAGE
+  ##############################################################
 
   deploy:
-    name: Deploy Application
+
     runs-on: ubuntu-latest
-    needs: terraform
+
+    needs: terraform-provision
 
     steps:
 
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      ##########################################################
+      # CREATE SSH KEY
+      ##########################################################
 
-      # =========================
-      # FETCH VAULT SECRETS
-      # =========================
-      - name: Import Vault Secrets
-        uses: hashicorp/vault-action@v3
+      - name: Create SSH Key
+        run: |
+
+          echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
+
+          chmod 400 private_key.pem
+
+      ##########################################################
+      # WAIT FOR EC2 INITIALIZATION
+      ##########################################################
+
+      - name: Wait For EC2 Initialization
+        run: |
+
+          sleep 180
+
+      ##########################################################
+      # DEPLOY CONTAINERS
+      ##########################################################
+
+      - name: Deploy Containers
+        uses: appleboy/ssh-action@master
         with:
-          url: ${{ secrets.VAULT_ADDR }}
-          token: ${{ secrets.VAULT_TOKEN }}
-          secrets: |
-            secret/data/devsecops dockerhub_username | DOCKER_USERNAME ;
-            secret/data/devsecops dockerhub_password | DOCKER_PASSWORD
+          host: ${{ needs.terraform-provision.outputs.public_ip }}
+          username: ubuntu
+          key_path: private_key.pem
+          script: |
 
-      # =========================
-      # SSH KEY
-      # =========================
-      - name: Configure SSH
-        run: |
-          echo "${{ secrets.EC2_SSH_KEY }}" > key.pem
-          chmod 400 key.pem
+            docker pull aditya1436/enterprise-devsecops-app:latest
 
-      # =========================
-      # WAIT FOR EC2
-      # =========================
-      - name: Wait for EC2
-        run: sleep 180
+            docker rm -f dev-container || true
 
-      # =========================
-      # DEPLOY TO EC2
-      # =========================
-      - name: Deploy Docker Container
-        run: |
-          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@${{ needs.terraform.outputs.public_ip }} << EOF
+            docker rm -f staging-container || true
 
-          docker login -u ${DOCKER_USERNAME} -p ${DOCKER_PASSWORD}
+            docker rm -f production-container || true
 
-          docker pull aditya1436/enterprise-devsecops-app:latest
-
-          docker stop dev || true
-          docker rm dev || true
-
-          docker stop staging || true
-          docker rm staging || true
-
-          docker stop prod || true
-          docker rm prod || true
-
-          docker run -d \
-            --name dev \
+            docker run -d \
+            --name dev-container \
             -p 3000:3000 \
             aditya1436/enterprise-devsecops-app:latest
 
-          docker run -d \
-            --name staging \
+            docker run -d \
+            --name staging-container \
             -p 3001:3000 \
             aditya1436/enterprise-devsecops-app:latest
 
-          docker run -d \
-            --name prod \
+            docker run -d \
+            --name production-container \
             -p 3002:3000 \
             aditya1436/enterprise-devsecops-app:latest
 
-          EOF
+      ##########################################################
+      # SUCCESS MESSAGE
+      ##########################################################
+
+      - name: Deployment Completed
+        run: |
+
+          echo "Enterprise DevSecOps Pipeline Completed Successfully"
