@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
 
       ##########################################################
-      # GITLEAKS SCAN
+      # GITLEAKS SECRET SCAN
       ##########################################################
 
       - name: Run Gitleaks Scan
@@ -42,7 +42,17 @@ jobs:
         continue-on-error: true
 
       ##########################################################
-      # TRIVY FILESYSTEM SCAN
+      # SEMGREP SAST SCAN
+      ##########################################################
+
+      - name: Run Semgrep SAST Scan
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: auto
+        continue-on-error: true
+
+      ##########################################################
+      # TRIVY FILESYSTEM / DEPENDENCY SCAN
       ##########################################################
 
       - name: Run Trivy Filesystem Scan
@@ -56,7 +66,7 @@ jobs:
           exit-code: 1
 
       ##########################################################
-      # CHECKOV SCAN
+      # CHECKOV IaC SCAN
       ##########################################################
 
       - name: Run Checkov Scan
