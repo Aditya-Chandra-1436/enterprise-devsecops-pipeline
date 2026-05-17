@@ -52,7 +52,7 @@ jobs:
         continue-on-error: true
 
       ##########################################################
-      # TRIVY FILESYSTEM / DEPENDENCY SCAN
+      # TRIVY FILESYSTEM SCAN
       ##########################################################
 
       - name: Run Trivy Filesystem Scan
@@ -103,11 +103,9 @@ jobs:
         run: |
 
           sudo apt-get update
-
           sudo apt-get install jq -y
 
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
-
           export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
 
           curl \
@@ -117,7 +115,6 @@ jobs:
           > dockerhub.json
 
           echo "DOCKER_USERNAME=$(jq -r '.data.data.username' dockerhub.json)" >> $GITHUB_ENV
-
           echo "DOCKER_PASSWORD=$(jq -r '.data.data.password' dockerhub.json)" >> $GITHUB_ENV
 
       ##########################################################
@@ -165,7 +162,7 @@ jobs:
           aditya1436/enterprise-devsecops-app:latest
 
   ##############################################################
-  # TERRAFORM PROVISIONING
+  # TERRAFORM PROVISIONING STAGE
   ##############################################################
 
   terraform-provision:
@@ -194,11 +191,9 @@ jobs:
         run: |
 
           sudo apt-get update
-
           sudo apt-get install jq -y
 
           export VAULT_ADDR=${{ secrets.VAULT_ADDR }}
-
           export VAULT_TOKEN=${{ secrets.VAULT_TOKEN }}
 
           curl \
@@ -208,7 +203,6 @@ jobs:
           > aws.json
 
           echo "AWS_ACCESS_KEY_ID=$(jq -r '.data.data.AWS_ACCESS_KEY_ID' aws.json)" >> $GITHUB_ENV
-
           echo "AWS_SECRET_ACCESS_KEY=$(jq -r '.data.data.AWS_SECRET_ACCESS_KEY' aws.json)" >> $GITHUB_ENV
 
       ##########################################################
@@ -219,34 +213,32 @@ jobs:
         uses: hashicorp/setup-terraform@v3
 
       ##########################################################
-      # CREATE SSH PRIVATE KEY
+      # CREATE PRIVATE KEY
       ##########################################################
 
-      - name: Create SSH Private Key
+      - name: Create Private Key
         run: |
 
           echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
-
           chmod 400 private_key.pem
 
       ##########################################################
-      # CREATE SSH PUBLIC KEY
+      # GENERATE PUBLIC KEY
       ##########################################################
 
-      - name: Create SSH Public Key
+      - name: Generate Public Key
         run: |
 
           ssh-keygen -y -f private_key.pem > public_key.pub
 
       ##########################################################
-      # MOVE PUBLIC KEY
+      # COPY PUBLIC KEY
       ##########################################################
 
-      - name: Move Public Key
+      - name: Copy Public Key
         run: |
 
           mkdir -p terraform/keys
-
           cp public_key.pub terraform/keys/id_rsa.pub
 
       ##########################################################
@@ -289,7 +281,7 @@ jobs:
           terraform apply -auto-approve
 
       ##########################################################
-      # GET EC2 PUBLIC IP
+      # GET PUBLIC IP
       ##########################################################
 
       - name: Get EC2 Public IP
@@ -301,6 +293,8 @@ jobs:
         run: |
 
           PUBLIC_IP=$(terraform output -raw deployment_server_ip)
+
+          echo "PUBLIC IP = $PUBLIC_IP"
 
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
@@ -324,11 +318,19 @@ jobs:
         run: |
 
           echo "${{ secrets.EC2_SSH_KEY }}" > private_key.pem
-
           chmod 400 private_key.pem
 
       ##########################################################
-      # WAIT FOR EC2 INITIALIZATION
+      # DEBUG PUBLIC IP
+      ##########################################################
+
+      - name: Debug Public IP
+        run: |
+
+          echo "PUBLIC IP = ${{ needs.terraform-provision.outputs.public_ip }}"
+
+      ##########################################################
+      # WAIT FOR EC2
       ##########################################################
 
       - name: Wait For EC2 Initialization
@@ -351,9 +353,7 @@ jobs:
             docker pull aditya1436/enterprise-devsecops-app:latest
 
             docker rm -f dev-container || true
-
             docker rm -f staging-container || true
-
             docker rm -f production-container || true
 
             docker run -d \
@@ -378,4 +378,4 @@ jobs:
       - name: Deployment Completed
         run: |
 
-          echo "Enterprise DevSecOps Pipeline Completed Successfully"
+          echo "Enterprise DevSecOps Pipeline Completed Successfully."
